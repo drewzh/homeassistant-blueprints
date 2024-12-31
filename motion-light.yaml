@@ -1,5 +1,5 @@
 blueprint:
-  name: Motion-Activated Lighting with Sun & Night Mode
+  name: Advanced Motion-Activated Lights
   description: >
     This blueprint turns on lights based on a motion sensor. It adjusts brightness
     based on whether it's day or night (using the sun's position). It also has an optional
