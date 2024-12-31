@@ -186,14 +186,15 @@ action:
             target: "{{ main_lights }}"
 
   ###########################################################
-  # Step B: Wait for motion sensor to go 'off' or timeout
+  # Step B: Wait for motion sensor to go 'off' for the specified duration
   ###########################################################
   - wait_for_trigger:
       - platform: state
         entity_id: !input motion_sensor
         from: "on"
         to: "off"
-    timeout: "{{ timeout | int }}"
+        for:
+          seconds: "{{ timeout | int }}"
 
   ###########################################################
   # Step C: Only turn off if sensor is still 'off'
