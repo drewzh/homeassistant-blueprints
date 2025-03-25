@@ -96,17 +96,6 @@ blueprint:
           unit_of_measurement: "%"
           mode: slider
 
-    transition:
-      name: Transition Time
-      description: "Time in seconds to transition between light states."
-      default: 3
-      selector:
-        number:
-          min: 0
-          max: 30
-          unit_of_measurement: seconds
-          mode: slider
-
 mode: restart
 max_exceeded: silent
 
@@ -132,7 +121,6 @@ variables:
   day_brightness: !input day_brightness
   night_brightness: !input night_brightness
   night_mode_brightness: !input night_mode_brightness
-  transition: !input transition
 
 #############################################################
 # 3) Condition: Check the blocking entity if it’s set
@@ -173,7 +161,6 @@ action:
           - service: light.turn_on
             data:
               brightness_pct: "{{ night_mode_brightness }}"
-              transition: "{{ transition }}"
             target: "{{ night_lights }}"
 
       # 2) If sun is above horizon => day brightness
@@ -185,7 +172,6 @@ action:
           - service: light.turn_on
             data:
               brightness_pct: "{{ day_brightness }}"
-              transition: "{{ transition }}"
             target: "{{ main_lights }}"
 
       # 3) Otherwise => sun is below horizon => night brightness
@@ -197,7 +183,6 @@ action:
           - service: light.turn_on
             data:
               brightness_pct: "{{ night_brightness }}"
-              transition: "{{ transition }}"
             target: "{{ main_lights }}"
 
   ###########################################################
@@ -222,10 +207,6 @@ action:
   # Step D: Turn off all involved lights
   ###########################################################
   - service: light.turn_off
-    data:
-      transition: "{{ transition }}"
     target: "{{ main_lights }}"
   - service: light.turn_off
-    data:
-      transition: "{{ transition }}"
     target: "{{ night_lights }}"
