@@ -1,10 +1,8 @@
 blueprint:
-  name: Advanced Motion Lights
+  name: Motion Activated Lights
   description: >
-    This blueprint turns on lights based on a motion sensor. It adjusts brightness
-    based on whether it's day or night (using the sun's position). It also has an optional
-    "night mode" (triggered by an entity), an optional blocking entity, and a configurable
-    timeout after which lights turn off if no further motion is detected.
+    Simple motion-activated lights with Adaptive Lighting integration. 
+    Supports optional blocking entity (e.g., sleep mode) and configurable timeout.
   domain: automation
   input:
     motion_sensor:
@@ -14,23 +12,13 @@ blueprint:
         entity:
           domain: binary_sensor
 
-    main_lights:
-      name: Main Lights
-      description: "Lights to turn on in normal (day/night) mode."
+    lights:
+      name: Lights
+      description: "Lights to turn on when motion is detected."
       selector:
         target:
           entity:
             domain: light
-      default: []
-
-    night_lights:
-      name: Night Mode Lights
-      description: "Lights to turn on in night mode (if configured)."
-      selector:
-        target:
-          entity:
-            domain: light
-      default: []
 
     timeout:
       name: Timeout (seconds)
@@ -49,52 +37,10 @@ blueprint:
       name: Blocking Entity (Optional)
       description: >
         If defined, the lights won't turn on when this entity is in a blocking state (e.g. 'on').
-        For example, you can use a virtual switch or a different sensor. Leave empty to ignore.
+        For example, you can use a sleep mode switch. Leave empty to ignore.
       selector:
         entity: {}
       default: ""
-
-    night_mode_entity:
-      name: Night Mode Entity (Optional)
-      description: >
-        If defined, when this entity is 'on', the blueprint will use "Night Mode Lights"
-        with the "Night Mode Brightness". Otherwise, normal day/night logic applies.
-      selector:
-        entity: {}
-      default: ""
-
-    day_brightness:
-      name: Day Brightness
-      description: "Brightness (%) used when the sun is above the horizon (daytime)."
-      default: 50
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: "%"
-          mode: slider
-
-    night_brightness:
-      name: Night Brightness
-      description: "Brightness (%) used when the sun is below the horizon (nighttime)."
-      default: 78
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: "%"
-          mode: slider
-
-    night_mode_brightness:
-      name: Night Mode Brightness
-      description: "Brightness (%) used when the optional Night Mode Entity is on."
-      default: 20
-      selector:
-        number:
-          min: 1
-          max: 100
-          unit_of_measurement: "%"
-          mode: slider
 
 mode: restart
 max_exceeded: silent
@@ -113,100 +59,45 @@ trigger:
 #############################################################
 variables:
   motion_sensor: !input motion_sensor
-  main_lights: !input main_lights
-  night_lights: !input night_lights
+  lights: !input lights
   timeout: !input timeout
   block_entity: !input block_entity
-  night_mode_entity: !input night_mode_entity
-  day_brightness: !input day_brightness
-  night_brightness: !input night_brightness
-  night_mode_brightness: !input night_mode_brightness
 
 #############################################################
 # 3) Condition: Check the blocking entity if it’s set
 #############################################################
 condition:
-  - condition: or
-    conditions:
-      # a) If no blocking entity is defined...
-      - condition: template
-        value_template: "{{ block_entity == '' }}"
-      # b) Or blocking entity exists but is NOT 'on'...
-      - condition: template
-        value_template: >
-          {% if block_entity != '' %}
-            {{ not is_state(block_entity, 'on') }}
-          {% else %}
-            false
-          {% endif %}
+  - condition: template
+    value_template: >
+      {{ block_entity == '' or not is_state(block_entity, 'on') }}
 
 #############################################################
 # 4) Action Steps
 #############################################################
 action:
   ###########################################################
-  # Step A: Turn on the appropriate lights/brightness
+  # Step A: Turn on the lights
   ###########################################################
-  - choose:
-      # 1) If night_mode_entity is defined AND is on, use night_lights + night_mode_brightness
-      - conditions:
-          - condition: template
-            value_template: >
-              {% if night_mode_entity != '' %}
-                {{ is_state(night_mode_entity, 'on') }}
-              {% else %}
-                false
-              {% endif %}
-        sequence:
-          - service: light.turn_on
-            data:
-              brightness_pct: "{{ night_mode_brightness }}"
-            target: "{{ night_lights }}"
-
-      # 2) If sun is above horizon => day brightness
-      - conditions:
-          - condition: state
-            entity_id: sun.sun
-            state: "above_horizon"
-        sequence:
-          - service: light.turn_on
-            data:
-              brightness_pct: "{{ day_brightness }}"
-            target: "{{ main_lights }}"
-
-      # 3) Otherwise => sun is below horizon => night brightness
-      - conditions:
-          - condition: state
-            entity_id: sun.sun
-            state: "below_horizon"
-        sequence:
-          - service: light.turn_on
-            data:
-              brightness_pct: "{{ night_brightness }}"
-            target: "{{ main_lights }}"
+  - service: light.turn_on
+    target: "{{ lights }}"
 
   ###########################################################
-  # Step B: Wait for motion sensor to go 'off' for the specified duration
+  # Step B: Wait for motion to clear for the specified duration
   ###########################################################
   - wait_for_trigger:
       - platform: state
-        entity_id: !input motion_sensor
+        entity_id: "{{ motion_sensor }}"
         from: "on"
         to: "off"
         for:
-          seconds: "{{ timeout | int }}"
+          seconds: "{{ timeout }}"
 
   ###########################################################
-  # Step C: Only turn off if sensor is still 'off'
+  # Step C: Turn off lights (only if motion is still clear)
   ###########################################################
   - condition: state
-    entity_id: !input motion_sensor
+    entity_id: "{{ motion_sensor }}"
     state: "off"
 
-  ###########################################################
-  # Step D: Turn off all involved lights
-  ###########################################################
   - service: light.turn_off
-    target: "{{ main_lights }}"
-  - service: light.turn_off
-    target: "{{ night_lights }}"
+    target: "{{ lights }}"
