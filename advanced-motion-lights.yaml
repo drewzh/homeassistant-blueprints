@@ -1,8 +1,8 @@
 blueprint:
-  name: Motion Activated Lights
+  name: Advanced Motion Lights
   description: >
-    Simple motion-activated lights with Adaptive Lighting integration. 
-    Supports optional blocking entity (e.g., sleep mode) and configurable timeout.
+    Motion-activated lights with Adaptive Lighting integration. Supports day/night lights,
+    optional night mode sensor, optional blocking entity, and configurable timeout.
   domain: automation
   input:
     motion_sensor:
@@ -12,13 +12,22 @@ blueprint:
         entity:
           domain: binary_sensor
 
-    lights:
-      name: Lights
-      description: "Lights to turn on when motion is detected."
+    main_lights:
+      name: Main/Day Lights
+      description: "Lights to turn on during normal/day mode."
       selector:
         target:
           entity:
             domain: light
+
+    night_lights:
+      name: Night Mode Lights (Optional)
+      description: "Lights to turn on in night mode (if night mode sensor is configured)."
+      selector:
+        target:
+          entity:
+            domain: light
+      default: []
 
     timeout:
       name: Timeout (seconds)
@@ -42,6 +51,15 @@ blueprint:
         entity: {}
       default: ""
 
+    night_mode_entity:
+      name: Night Mode Entity (Optional)
+      description: >
+        If defined, when this entity is 'on', the blueprint will use "Night Mode Lights".
+        Otherwise, main lights will be used. Brightness is handled by Adaptive Lighting.
+      selector:
+        entity: {}
+      default: ""
+
 mode: restart
 max_exceeded: silent
 
@@ -59,9 +77,11 @@ trigger:
 #############################################################
 variables:
   motion_sensor: !input motion_sensor
-  lights: !input lights
+  main_lights: !input main_lights
+  night_lights: !input night_lights
   timeout: !input timeout
   block_entity: !input block_entity
+  night_mode_entity: !input night_mode_entity
 
 #############################################################
 # 3) Condition: Check the blocking entity if it’s set
@@ -76,10 +96,25 @@ condition:
 #############################################################
 action:
   ###########################################################
-  # Step A: Turn on the lights
+  # Step A: Turn on the appropriate lights
   ###########################################################
-  - service: light.turn_on
-    target: "{{ lights }}"
+  - choose:
+      # If night_mode_entity is defined AND is on, use night_lights
+      - conditions:
+          - condition: template
+            value_template: >
+              {% if night_mode_entity != '' %}
+                {{ is_state(night_mode_entity, 'on') }}
+              {% else %}
+                false
+              {% endif %}
+        sequence:
+          - service: light.turn_on
+            target: "{{ night_lights }}"
+    # Default: use main_lights
+    default:
+      - service: light.turn_on
+        target: "{{ main_lights }}"
 
   ###########################################################
   # Step B: Wait for motion to clear for the specified duration
@@ -99,5 +134,10 @@ action:
     entity_id: !input motion_sensor
     state: "off"
 
+  ###########################################################
+  # Step D: Turn off all involved lights
+  ###########################################################
   - service: light.turn_off
-    target: "{{ lights }}"
+    target: "{{ main_lights }}"
+  - service: light.turn_off
+    target: "{{ night_lights }}"
