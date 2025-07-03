@@ -96,7 +96,7 @@ action:
   # Step C: Turn off lights (only if motion is still clear)
   ###########################################################
   - condition: state
-    entity_id: "{{ motion_sensor }}"
+    entity_id: !input motion_sensor
     state: "off"
 
   - service: light.turn_off
