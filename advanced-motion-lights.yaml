@@ -3,6 +3,7 @@ blueprint:
   description: >
     Motion-activated lights with Adaptive Lighting integration. Supports day/night lights,
     optional night mode sensor, optional blocking entity, and configurable timeout.
+    Lights switched on manually (outside of motion) also auto-off after the same timeout.
   domain: automation
   input:
     motion_sensor:
@@ -16,23 +17,24 @@ blueprint:
       name: Main/Day Lights
       description: "Lights to turn on during normal/day mode."
       selector:
-        target:
-          entity:
-            domain: light
+        entity:
+          domain: light
+          multiple: true
 
     night_lights:
       name: Night Mode Lights (Optional)
       description: "Lights to turn on in night mode (if night mode sensor is configured)."
       selector:
-        target:
-          entity:
-            domain: light
+        entity:
+          domain: light
+          multiple: true
       default: []
 
     timeout:
       name: Timeout (seconds)
       description: >
-        Number of seconds to wait after motion is cleared before turning lights off.
+        Seconds to wait after motion clears before turning lights off.
+        Also used as the auto-off timer when lights are switched on manually without motion.
         If motion is detected again during this time, the countdown resets.
       default: 120
       selector:
@@ -47,6 +49,7 @@ blueprint:
       description: >
         If defined, the lights won't turn on when this entity is in a blocking state (e.g. 'on').
         For example, you can use a sleep mode switch. Leave empty to ignore.
+        Note: only gates motion-triggered activation. Manually switched lights still auto-off.
       selector:
         entity: {}
       default: ""
@@ -64,16 +67,7 @@ mode: restart
 max_exceeded: silent
 
 #############################################################
-# 1) Trigger: When motion_sensor goes from off -> on
-#############################################################
-trigger:
-  - platform: state
-    entity_id: !input motion_sensor
-    from: "off"
-    to: "on"
-
-#############################################################
-# 2) Variables: Make the input references easier to use
+# Variables
 #############################################################
 variables:
   motion_sensor: !input motion_sensor
@@ -84,60 +78,144 @@ variables:
   night_mode_entity: !input night_mode_entity
 
 #############################################################
-# 3) Condition: Check the blocking entity if it’s set
+# Triggers
+#   - motion: motion sensor goes from off -> on
+#   - manual: any main light is turned on from outside this automation
 #############################################################
-condition:
-  - condition: template
-    value_template: >
-      {{ block_entity == '' or not is_state(block_entity, 'on') }}
+trigger:
+  - platform: state
+    entity_id: !input motion_sensor
+    from: "off"
+    to: "on"
+    id: motion
+
+  - platform: state
+    entity_id: !input main_lights
+    to: "on"
+    id: manual
 
 #############################################################
-# 4) Action Steps
+# Actions — branched by trigger.id
 #############################################################
 action:
-  ###########################################################
-  # Step A: Turn on the appropriate lights
-  ###########################################################
   - choose:
-      # If night_mode_entity is defined AND is on, use night_lights
+
+      ###########################################################
+      # MOTION BRANCH — triggered by the motion sensor
+      ###########################################################
       - conditions:
           - condition: template
-            value_template: >
-              {% if night_mode_entity != '' %}
-                {{ is_state(night_mode_entity, 'on') }}
-              {% else %}
-                false
-              {% endif %}
+            value_template: "{{ trigger.id == 'motion' }}"
         sequence:
-          - service: light.turn_on
-            target: "{{ night_lights }}"
-    # Default: use main_lights
-    default:
-      - service: light.turn_on
-        target: "{{ main_lights }}"
+          # Bail out if blocking entity is active
+          - condition: template
+            value_template: >
+              {{ block_entity == '' or not is_state(block_entity, 'on') }}
 
-  ###########################################################
-  # Step B: Wait for motion to clear for the specified duration
-  ###########################################################
-  - wait_for_trigger:
-      - platform: state
-        entity_id: !input motion_sensor
-        from: "on"
-        to: "off"
-        for:
-          seconds: "{{ timeout }}"
+          # Turn on the appropriate lights (night vs day)
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >
+                      {% if night_mode_entity != '' %}
+                        {{ is_state(night_mode_entity, 'on') }}
+                      {% else %}
+                        false
+                      {% endif %}
+                sequence:
+                  - service: light.turn_on
+                    target:
+                      entity_id: !input night_lights
+            default:
+              - service: light.turn_on
+                target:
+                  entity_id: !input main_lights
 
-  ###########################################################
-  # Step C: Turn off lights (only if motion is still clear)
-  ###########################################################
-  - condition: state
-    entity_id: !input motion_sensor
-    state: "off"
+          # Wait for motion to clear for the full timeout duration
+          - wait_for_trigger:
+              - platform: state
+                entity_id: !input motion_sensor
+                from: "on"
+                to: "off"
+                for:
+                  seconds: "{{ timeout }}"
 
-  ###########################################################
-  # Step D: Turn off all involved lights
-  ###########################################################
-  - service: light.turn_off
-    target: "{{ main_lights }}"
-  - service: light.turn_off
-    target: "{{ night_lights }}"
+          # Safety check: only proceed if motion is still clear
+          - condition: state
+            entity_id: !input motion_sensor
+            state: "off"
+
+          # Turn off all involved lights
+          - service: light.turn_off
+            target:
+              entity_id: !input main_lights
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ night_lights | length > 0 }}"
+                sequence:
+                  - service: light.turn_off
+                    target:
+                      entity_id: "{{ night_lights }}"
+
+      ###########################################################
+      # MANUAL BRANCH — a main light was turned on manually
+      ###########################################################
+      - conditions:
+          - condition: template
+            value_template: "{{ trigger.id == 'manual' }}"
+        sequence:
+          - choose:
+
+              # Sub-branch A: motion is currently active
+              # Stay with the motion-complete wait so lights remain on while occupied
+              - conditions:
+                  - condition: state
+                    entity_id: !input motion_sensor
+                    state: "on"
+                sequence:
+                  - wait_for_trigger:
+                      - platform: state
+                        entity_id: !input motion_sensor
+                        from: "on"
+                        to: "off"
+                        for:
+                          seconds: "{{ timeout }}"
+
+                  - condition: state
+                    entity_id: !input motion_sensor
+                    state: "off"
+
+                  - service: light.turn_off
+                    target:
+                      entity_id: !input main_lights
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ night_lights | length > 0 }}"
+                        sequence:
+                          - service: light.turn_off
+                            target:
+                              entity_id: "{{ night_lights }}"
+
+            # Sub-branch B: no motion — simple countdown then auto-off
+            default:
+              - delay:
+                  seconds: "{{ timeout }}"
+
+              # Only turn off if no motion started during the delay
+              - condition: state
+                entity_id: !input motion_sensor
+                state: "off"
+
+              - service: light.turn_off
+                target:
+                  entity_id: !input main_lights
+              - choose:
+                  - conditions:
+                      - condition: template
+                        value_template: "{{ night_lights | length > 0 }}"
+                    sequence:
+                      - service: light.turn_off
+                        target:
+                          entity_id: "{{ night_lights }}"
